@@ -282,14 +282,12 @@ function GetScanArea(sensor)
 end
 
 -- cache inventories, keep inventory index
+---@param itemSensor any
+---@param entity LuaEntity
 function SetInventories(itemSensor, entity)
   itemSensor.Inventory = {}
-  local inv = nil
-  for i=1, 8 do -- iterate blindly over every possible inventory and store the result so we have to do it only once
-    inv = entity.get_inventory(i)
-    if inv then
-      itemSensor.Inventory[i] = inv
-    end
+  for i=1, entity.get_max_inventory_index() do -- iterate blindly over every possible inventory and store the result so we have to do it only once
+    itemSensor.Inventory[i] = entity.get_inventory(i --[[ @as defines.inventory ]])
   end
 end
 
@@ -375,7 +373,6 @@ function UpdateSensor(itemSensor)
     or connectedEntity.train.state == defines.train_state.wait_signal
     or connectedEntity.train.state == defines.train_state.manual_control then --keeps showing inventory for ScanInterval ticks after movement start > neglect able
       add_filter(parameter_locomotive)
-      signalIndex = 2
     else -- train is moving > remove connection
         ClearSensor(itemSensor)
         return
