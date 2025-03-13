@@ -1,5 +1,5 @@
 Version: 2.0.5
-Date: 2025-03-12
+Date: 2025-03-13
   Bugfixes:
     - don't crash if a signal shows up in multiple inventories (fixes #2 - thanks @fedcomp, #3 - thanks @GentlemanBear, thanks @Joserichi for a PR!)
     - show all inventories of e.g. rocket silo, especially inventories with index > 8 (thanks @xyzzycgn for a PR!)
