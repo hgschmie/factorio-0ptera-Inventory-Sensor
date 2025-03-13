@@ -1,3 +1,5 @@
+local util = require('util')
+
 -- constant prototypes names
 local MOD_NAME = "Inventory Sensor"
 local SENSOR = "item-sensor"
@@ -323,6 +325,17 @@ function SetConnectedEntity(itemSensor)
   itemSensor.Inventory = {}
 end
 
+local function ClearSensor(itemSensor)
+    assert(itemSensor)
+    itemSensor.ConnectedEntity = nil
+    itemSensor.Inventory = {}
+    itemSensor.SkipEntityScanning = false
+    itemSensor.SiloStatus = nil
+    local control_behavior = assert(itemSensor.Sensor.get_control_behavior()) --[[@as LuaConstantCombinatorControlBehavior ]]
+    if control_behavior.sections_count == 0 then control_behavior.add_section() end
+    local section = control_behavior.get_section(1)
+    section.filters = {}
+end
 
 function UpdateSensor(itemSensor)
   local sensor = itemSensor.Sensor
@@ -330,36 +343,41 @@ function UpdateSensor(itemSensor)
 
   -- clear output of invalid connections
   if not connectedEntity or not connectedEntity.valid or not itemSensor.Inventory then
-    itemSensor.ConnectedEntity = nil
-    itemSensor.Inventory = {}
-    itemSensor.SkipEntityScanning = false
-    itemSensor.SiloStatus = nil
-    local control_behavior = sensor.get_control_behavior() --[[@as LuaConstantCombinatorControlBehavior ]]
-    local section = control_behavior.get_section(1)
-    section.filters = {}
+    ClearSensor(itemSensor)
     return
   end
 
   local burner = connectedEntity.burner -- caching burner makes no difference in performance
   local remaining_fuel = 0
   ---@type LogisticFilter[]
-  local signals = {}
-  local signalIndex = 1
+  local filters = {}
+  ---@type table<string, integer>
+  local seen = {}
 
+  ---@param filter LogisticFilter
+  local add_filter = function(filter)
+    local key = string.format("%s,%s,%s", filter.value.name, filter.value.type or 'item', filter.value.quality or 'normal')
+
+    local index = seen[key]
+    if index then
+        assert(filters[index])
+        filters[index].min = filters[index].min + filter.min
+    else
+        table.insert(filters, util.copy(filter))
+        seen[key] = #filters
+    end
+  end
+
+  
   -- Vehicle signals and movement detection
   if connectedEntity.type == LOCO then
     if connectedEntity.train.state == defines.train_state.wait_station
     or connectedEntity.train.state == defines.train_state.wait_signal
     or connectedEntity.train.state == defines.train_state.manual_control then --keeps showing inventory for ScanInterval ticks after movement start > neglect able
-      signals[signalIndex] = parameter_locomotive
+      add_filter(parameter_locomotive)
       signalIndex = 2
     else -- train is moving > remove connection
-      itemSensor.ConnectedEntity = nil
-      itemSensor.Inventory = {}
-      itemSensor.SkipEntityScanning = false
-      local control_behavior = sensor.get_control_behavior() --[[@as LuaConstantCombinatorControlBehavior ]]
-      local section = control_behavior.get_section(1)
-      section.filters = {}
+        ClearSensor(itemSensor)
         return
     end
 
@@ -367,64 +385,44 @@ function UpdateSensor(itemSensor)
     if connectedEntity.train.state == defines.train_state.wait_station
     or connectedEntity.train.state == defines.train_state.wait_signal
     or connectedEntity.train.state == defines.train_state.manual_control then --keeps showing inventory for ScanInterval ticks after movement start > neglect able
-      signals[signalIndex] = parameter_wagon
-      signalIndex = 2
+      add_filter(parameter_wagon)
     else -- train is moving > remove connection
-      itemSensor.ConnectedEntity = nil
-      itemSensor.Inventory = {}
-      itemSensor.SkipEntityScanning = false
-      local control_behavior = sensor.get_control_behavior() --[[@as LuaConstantCombinatorControlBehavior ]]
-      local section = control_behavior.get_section(1)
-      section.filters = {}
-      return
+        ClearSensor(itemSensor)
+        return
     end
 
   elseif connectedEntity.type == CAR then
     if tostring(connectedEntity.speed) == "0" then --car isn't moving
       if connectedEntity.name == TANK then
-        signals[signalIndex] = parameter_tank
+        add_filter(parameter_tank)
       else
-        signals[signalIndex] = parameter_car
+        add_filter(parameter_car)
       end
-      signalIndex = 2
     else -- car is moving > remove connection
-      itemSensor.ConnectedEntity = nil
-      itemSensor.Inventory = {}
-      itemSensor.SkipEntityScanning = false
-      local control_behavior = sensor.get_control_behavior() --[[@as LuaConstantCombinatorControlBehavior ]]
-      local section = control_behavior.get_section(1)
-      section.filters = {}
-      return
+        ClearSensor(itemSensor)
+        return
     end
 
   elseif connectedEntity.type == SPIDER then
     -- in 1.0 spidertron doesn't have speed exposed
     if tostring(connectedEntity.speed) == "0" then
-      signals[signalIndex] = parameter_spider
-      signalIndex = 2
+      add_filter(parameter_spider)
     else -- car is moving > remove connection
-      itemSensor.ConnectedEntity = nil
-      itemSensor.Inventory = {}
-      itemSensor.SkipEntityScanning = false
-      local control_behavior = sensor.get_control_behavior() --[[@as LuaConstantCombinatorControlBehavior ]]
-      local section = control_behavior.get_section(1)
-      section.filters = {}
-      return
+        ClearSensor(itemSensor)
+        return
     end
 
   -- special signals
   elseif connectedEntity.type == ASSEMBLER or connectedEntity.type == FURNACE then
     local progress = connectedEntity.crafting_progress
     if progress then
-      signals[signalIndex] = {value = signal_progress, min = floor(progress*100)}
-      signalIndex = signalIndex+1
+      add_filter({value = signal_progress, min = floor(progress*100)})
     end
 
   elseif connectedEntity.type == LAB then
     local progress = connectedEntity.force.research_progress
     if progress then
-      signals[signalIndex] = {value = signal_progress, min = floor(progress*100)}
-      signalIndex = signalIndex+1
+      add_filter({value = signal_progress, min = floor(progress*100)})
     end
 
   elseif connectedEntity.type == SILO then
@@ -443,25 +441,22 @@ function UpdateSensor(itemSensor)
     end
     if itemSensor.SiloStatus and parts == 0 then parts = 100 end
 
-    signals[signalIndex] = {value = signal_progress, min = parts}
-    signalIndex = signalIndex+1
+    add_filter({value = signal_progress, min = parts})
 
   end
 
   --get temperature
   local temp = connectedEntity.temperature
   if temp then
-    signals[signalIndex] = {value = signal_temperature ,min = floor(temp+0.5)}
-    signalIndex = signalIndex+1
+    add_filter({value = signal_temperature ,min = floor(temp+0.5)})
   end
 
   -- get all fluids
-  
+
   for i=1, connectedEntity.fluids_count, 1 do
     local fluid = connectedEntity.get_fluid(i)
     if fluid then
-      signals[signalIndex] = { value = {type = "fluid", name = fluid.name, quality='normal' }, min = ceil(fluid.amount) }
-      signalIndex = signalIndex+1
+      add_filter({ value = {type = "fluid", name = fluid.name, quality='normal' }, min = ceil(fluid.amount) })
     end
   end
 
@@ -469,8 +464,7 @@ function UpdateSensor(itemSensor)
   for inv_index, inv in pairs(itemSensor.Inventory) do
     local contentsTable = inv.get_contents()
     for _, entry in pairs(contentsTable) do
-      signals[signalIndex] = { value = {type = "item", name = entry.name, quality = entry.quality }, min = entry.count }
-      signalIndex = signalIndex+1
+      add_filter({ value = {type = "item", name = entry.name, quality = entry.quality }, min = entry.count })
       -- add fuel values for items in fuel inventory
       if burner and inv_index == defines.inventory.fuel then
         remaining_fuel = remaining_fuel + (storage.fuel_values[entry.name] * entry.count)
@@ -484,8 +478,7 @@ function UpdateSensor(itemSensor)
       remaining_fuel = remaining_fuel + burner.remaining_burning_fuel / 1000000 -- game reports J we use MJ
     end
 
-    signals[signalIndex] = {value = signal_fuel ,min = min(floor(remaining_fuel + 0.5), 2147483647)}
-    signalIndex = signalIndex+1
+    add_filter({value = signal_fuel ,min = min(floor(remaining_fuel + 0.5), 2147483647)})
   end
 
   -- get equipment grids if available
@@ -498,18 +491,16 @@ function UpdateSensor(itemSensor)
       items[name] = (items[name] or 0) + 1
     end
     for k, v in pairs(items) do
-      signals[signalIndex] = { value = {type = "item", name = k, quality= 'normal', }, min = v }
-      signalIndex = signalIndex+1
+      add_filter({ value = {type = "item", name = k, quality= 'normal', }, min = v })
     end
   end
 
   local control_behavior = sensor.get_control_behavior() --[[@as LuaConstantCombinatorControlBehavior ]]
-  local section = control_behavior.get_section(1)
-  assert(section)
-  section.filters = {}
-  for idx, signal in pairs(signals) do
-    section.set_slot(idx, signal)
+  if control_behavior.sections_count == 0 then
+    control_behavior.add_section()
   end
+  local section = assert(control_behavior.get_section(1))
+  section.filters = filters
 end
 
 ---- INIT ----
