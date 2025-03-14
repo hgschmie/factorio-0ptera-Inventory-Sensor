@@ -80,6 +80,8 @@ local signal_progress = {type = "virtual",name = "inv-sensor-progress", quality=
 local signal_temperature = {type = "virtual",name = "inv-sensor-temperature", quality='normal'}
 ---@type SignalFilter
 local signal_fuel = {type = "virtual",name = "inv-sensor-fuel", quality='normal'}
+---@type SignalFilter
+local signal_rocket = {type = "virtual",name = "signal-R", quality='normal'}
 
 local floor = math.floor
 local ceil = math.ceil
@@ -328,7 +330,6 @@ local function ClearSensor(itemSensor)
     itemSensor.ConnectedEntity = nil
     itemSensor.Inventory = {}
     itemSensor.SkipEntityScanning = false
-    itemSensor.SiloStatus = nil
     local control_behavior = assert(itemSensor.Sensor.get_control_behavior()) --[[@as LuaConstantCombinatorControlBehavior ]]
     if control_behavior.sections_count == 0 then control_behavior.add_section() end
     local section = control_behavior.get_section(1)
@@ -423,23 +424,17 @@ function UpdateSensor(itemSensor)
     end
 
   elseif connectedEntity.type == SILO then
-    -- rocket inventory is nil when no rocket is ready so we have to constantly grab all possible inventories.
-    SetInventories(itemSensor, connectedEntity)
+    local progress = math.ceil((connectedEntity.rocket_parts * 100) / connectedEntity.prototype.rocket_parts_required)
+    local rocket_present = connectedEntity.rocket
 
-    local parts = connectedEntity.rocket_parts
-    -- rocket_parts becomes 0 when a rocket is built and lifted up for launch
-    -- we display 100 until it takes off
-    if itemSensor.SiloStatus == nil and parts > 0 then
-      itemSensor.SiloStatus = 1 -- building rocket
-    elseif itemSensor.SiloStatus == 1 and connectedEntity.get_inventory(defines.inventory.rocket_silo_rocket) then
-      itemSensor.SiloStatus = 2 -- rocket ready
-    elseif itemSensor.SiloStatus == 2 and not connectedEntity.get_inventory(defines.inventory.rocket_silo_rocket) then
-      itemSensor.SiloStatus = nil -- rocket has been launched
+    if progress == 0 and rocket_present then
+        -- old sensor reported 100 when a rocket is fully built
+        progress = 100
+        rocket_present = false
     end
-    if itemSensor.SiloStatus and parts == 0 then parts = 100 end
 
-    add_filter({value = signal_progress, min = parts})
-
+    add_filter({value = signal_progress, min = progress})
+    add_filter({value = signal_rocket, min = rocket_present and 1 or 0})
   end
 
   --get temperature
@@ -459,12 +454,14 @@ function UpdateSensor(itemSensor)
 
   -- get items in all inventories
   for inv_index, inv in pairs(itemSensor.Inventory) do
-    local contentsTable = inv.get_contents()
-    for _, entry in pairs(contentsTable) do
-      add_filter({ value = {type = "item", name = entry.name, quality = entry.quality }, min = entry.count })
-      -- add fuel values for items in fuel inventory
-      if burner and inv_index == defines.inventory.fuel then
-        remaining_fuel = remaining_fuel + (storage.fuel_values[entry.name] * entry.count)
+    if inv and inv.valid then
+      local contentsTable = inv.get_contents()
+      for _, entry in pairs(contentsTable) do
+        add_filter({ value = {type = "item", name = entry.name, quality = entry.quality }, min = entry.count })
+        -- add fuel values for items in fuel inventory
+        if burner and inv_index == defines.inventory.fuel then
+          remaining_fuel = remaining_fuel + (storage.fuel_values[entry.name] * entry.count)
+        end
       end
     end
   end
