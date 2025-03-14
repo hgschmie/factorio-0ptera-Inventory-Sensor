@@ -1,6 +1,6 @@
 ---------------------------------------------------------------------------------------------------
 Version: 2.0.6
-Date: ????
+Date: 2025-03-14
   Changes:
     - Support rocket silos properly for Space age and the regular game (progress counts to 100) - (#6, thanks @xyzzycgn)
     - If a rocket is present and another is being built, report progress of the second rocket and send a virtual "R" signal for a rocket being ready to launch
